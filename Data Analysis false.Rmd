@@ -1,0 +1,245 @@
+---
+title: "Data Analysis"
+author: "Isaac Radner"
+date: "May 6, 2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+#load the necessary libraries
+library(tidyverse)
+library(kableExtra)
+library(readxl)
+library(ggcorrplot)
+
+#set plot theme to "minimal"
+theme_set(theme_minimal())
+```
+
+##Import Data
+```{r}
+#Import the data sets I will be using, each of which is stored as a separate sheet in one excel file
+race_region <- read_excel("DBHDS_export.xlsx", 
+           sheet = "RaceRegion")
+
+substances_region <- read_excel("DBHDS_export.xlsx", 
+           sheet = "SubstancesRegion")
+```
+
+``` {r}
+#Create a function to 1) Change "Region" column to factor, 2) Rename regions from "1" to "Region 1", etc, 3) filter for the variables we will be using in the analysis
+region_recoder <- function(df) {
+  df %>%
+    filter(Program == "All Programs",
+           Drug != "Missing",
+           Drug != "None") %>%
+    mutate(Region = factor(Region)) %>%
+    mutate(Region = fct_recode(Region, 
+                               "Region 1" = "1", 
+                               "Region 2" = "2", 
+                               "Region 3" = "3",
+                               "Region 4" = "4",
+                               "Region 5" = "5"))
+}
+
+#Apply function to each data frame using above function
+race_region <- region_recoder(race_region)
+substances_region <- region_recoder(substances_region)
+```
+
+#Data Analysis - Virginia DBHDS Case Data  
+
+The below data analysis explores Behavioral Health Service data from the Virginia Department of Behavioral Health & Developmental Services. This data tracks use statistics for mental health and substance abuse services across the state. For the purpose of this anaylsis we will be aggregating the data for both mental health and substance abuse services (note: there is some chance that some individual's data may be duplicated if they received both types of services and/or received multiple episodes of care). We will be exploring both regional-level (Virginia is divided into 5 geographic regions) and state-level data. 
+
+The analysis will examine the variation across drug-type (for which a person is receiving treatment) and race.
+
+```{r}
+race_region %>%
+  filter(Race %in% c("White", "Black"),
+         Drug != "All Substances",
+         Region == "Statewide") %>%
+  group_by(Drug, Race) %>%
+  #use summarise and mean function to find average count for cases with each drug from 2008-2017
+  summarise(mean = mean(ItemCount)) %>%
+  ggplot() +
+  geom_col(aes(Race, mean, fill = Drug), position = "fill") + 
+  #use the "position = fill" argument display the average count as a percentage of total cases for each race
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Drug Prevalence by Race (Statewide)", 
+       subtitle = "2008 - 2017", 
+       y = "Percent of Total Cases",
+       x = "",
+       color = "",
+       caption = "Source: Virginia Social Indicator Dashboard")
+```
+
+The above graph, which shows the statewide average count (as a percentage of total count) of cases across drug-types for both Whites and Blacks (for all programs across all years for which there is data) shows many similarities about the prevalence of certain drug-types across the two races and several important differences. _Alcohol_, _heroin_, and _marijuana/hashish_ all make up a relatively similar percent of cases across the two races. However, cases involving _benzodiazepines_ and _other opiate/synthetic_ are more prevalent among Whites while cases involving _cocaine / crack_ use are slightly more prevalent among Blacks. 
+
+The below graph, which displays the average counts for each drug across race, confirms the above information. It is important to note that the counts for most drugs for Whites are higher than those for Blacks because, in most of Virginia, Whites make up more of the population and a higher percentage of the users of the state's behavioral health programs. This is why looking at the proportional rate of cases for each drug, as in the graph above, is slightly more useful for the present analysis. 
+
+```{r}
+race_region %>%
+  filter(Race %in% c("White", "Black"),
+         Drug != "All Substances",
+         Region == "Statewide") %>%
+  group_by(Drug, Race) %>%
+  summarise(mean = mean(ItemCount)) %>%
+  ggplot() +
+  geom_col(aes(Drug, mean, fill = Drug)) +
+  facet_wrap(~ Race) +
+  #Rotate labels for x-axis by 45 degrees to slightly enlarge graph
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(legend.position = "none") +
+  labs(title = "Drug Count (Statewide)", 
+       subtitle = "2008 - 2017", 
+       y = "Average Count",
+       x = "",
+       color = "",
+       caption = "Source: Virginia Social Indicator Dashboard")
+```
+
+It is worth pointing out that the higher rate of behavioral health cases involving _other opiate / synthetic_ for Whites probably reflects a higher use-rate of that class of drugs among Whites across the state of Virginia. Other data sources also suggest this conclusion. For example, the Kaiser Family Foundation, which tracks data on opioid-overdoses for each state, reports a higher overdose rate for Whites than other races in Virginia (source: https://www.kff.org/other/state-indicator/opioid-overdose-deaths-by-raceethnicity/).
+
+Additionally, it might be the case that variances in case rate across drugs might be causally related. For example, is the higher prevalence of cases for _benzodiazepine_ and _other opiate / synthetic_ use among Whites connected? We can begin to examine this question by looking at the correlation between the rates of drug prevalence between the various drug categories. The below table displays this correlation matrix for Whites. 
+
+```{r}
+# create correlation matrix using cor() function. Store it as a new object called "cor_drug_white" so that it can be displayed in a kable table and visualized in a heatmap (see below)
+cor_drug_white <- race_region %>%
+  filter(Race == "White",
+         Drug != "All Substances",
+         Region == "Statewide") %>%
+  group_by(Drug, Year) %>%
+  summarise(ItemCount) %>% 
+#Spread summary table so that each drug has its own column. This is necessary to perform the correlation function   on the data. 
+  spread(key = Drug, value = ItemCount) %>% 
+#Remove the year column so that it doesn't appear in the correlation matrix
+  select(-Year) %>% 
+  cor()
+
+#use kable function from the KableExtra package to display correlation matrix as a formatted Kable in markdown doc
+  kable(cor_drug_white, 
+        caption = "Correlation Coefficient Matrix 2008-2017, (Statewide, White)")
+```
+
+This correlation matrix is a bit easier to read if we display it visually using a correlation heat map (below). 
+
+```{r}
+#use "ggcorrplot" function from ggcorrplot package to visually display correlation matrix as a heatmap
+ggcorrplot(cor_drug_white, type = "lower", 
+             lab = TRUE, lab_size = 2.2, 
+             colors = c("#6D9EC1", "white", "#E46726")) +
+  # use "lab = TRUE" to display labels within each tile
+  theme_minimal(base_size = 8.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  #change size of x and y-axis text, and adjust text angle, to enlarge graph
+  labs( title = "Correlation Heatmap, 2008-2017 (Whites, Statewide)",
+          y = "",
+          x = "")
+```
+
+The above correlation matrix and heat-map show the relationship between rates of cases across drug-types for Whites. For example, a correlation coefficient of 0.96 for _benzodiazepine_ and _other opiate / synthetic_ suggests that there is a strong positive correlation between rates of cases for each drug type. This means that as the count for cases involving _benzodiazepines_ goes up, the count for cases involving _other opiate/synthetic_ drugs goes up as well, and vice versa. While this data only reflects the use of behavioral health services and not actual drug-use rates across the state of Virginia, this strong correlation might suggest a connection between _benzodiazepine_ and _other opiate / synthetic_ drug use. The correlation matrix also shows a strong correlation between rates of cases for _heroin_ and _methamphetamine_.  
+
+Let's examine the correlation matrix for rates of cases by drug for Blacks. 
+
+```{r}
+cor_drug_black <- race_region %>%
+  filter(Race == "Black",
+         Drug != "All Substances",
+         Region == "Statewide") %>%
+  group_by(Drug, Year) %>%
+  summarise(ItemCount) %>% 
+  spread(key = Drug, value = ItemCount) %>% 
+  select(-Year) %>% 
+  cor()
+
+ggcorrplot(cor_drug_black, type = "lower", 
+             lab = TRUE, lab_size = 2.2, 
+             colors = c("#6D9EC1", "white", "#E46726")) +
+    theme_minimal(base_size = 8.5) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs( title = "Correlation Heatmap, 2008-2017 (Blacks, Statewide)",
+          y = "",
+          x = "")
+```
+
+The above graph also shows a strong correlation (an even stronger one than that for Whites) between rates of cases involving _benzodiazepine_ and _other opiate / synthetic_ drug use. It also shows a strong correlation between rates of cases involving _marijuana / hashish_ and _hallucinogens_ (althouth it is important to note that tne case counts for these drug-types are quite low to begin with, so it is difficult to draw any strong statistical correlation between the two). 
+
+
+Next, let's examine change in rates of cases for different drugs over time, across race. 
+
+```{r}
+race_region %>%
+  filter(Race %in% c("White", "Black"),
+         Drug != "All Substances",
+         Drug %in% c("Heroin", "Other Opiate/Synthetic", 
+                     "Alcohol", "Marijuana/Hashish",
+                     "Cocaine/Crack", "Methamphetamine"),
+         Region == "Statewide") %>%
+  ggplot(aes(Year, ItemCount, color = Drug)) +
+  geom_line() +
+  facet_wrap(~ Race) +
+  scale_x_continuous(breaks=c(2008, 2010, 2012, 2014, 2016)) +
+  labs(title = "Case Count by Drug (Statewide)", 
+       subtitle = "2008 - 2017", 
+       y = "Case Count",
+       x = "",
+       color = "",
+       caption = "Source: Virginia Social Indicator Dashboard")
+```
+
+The above graph shows that, for the most part, changes in the count of cases for various drugs (which I have narrowed down to the top six most prevalent drug-types for this graph) have been the same for both Whites and Blacks. Rates for cases involving _alcohol_ and _marijuana / hashish_ use peaked around 2012 and have fallen since. There has been a slight increase in cases involving _heroin_ use. However, there has been a larger increase in cases involving both _other opiate / synthetic_ drug use and _methamphetamine_ use among Whites. This provides further evidence for the above hypothesis that, in Virginia, opiate use is more prevalent among Whites than Blacks. 
+
+Finally, it is worth pointing out the geographic differentiation between regions. In the graph below we can see some significant variation of the ratio of cases for Blacks and Whites across the different regions of Virginia. This data suggests that the variation might be across the rural / urban divide. _Region 1_ and _Region 3_ are both much more rural than the other regions, and both have a much higher percentage of cases for Whites than Blacks. 
+
+```{r}
+race_region %>%
+  filter(Race %in% c("White", "Black"),
+         Drug == "All Substances") %>%
+  ggplot(aes(Year, ItemPerc, color = Race)) +
+  geom_line() +
+  facet_wrap( ~ Region) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks=c(2008, 2012, 2016)) +
+  labs(title = "Case Ratio by Race (All Substances)", 
+       subtitle = "2008 - 2017", 
+       y = "Percent of all cases",
+       x = "",
+       color = "",
+       caption = "Source: Virginia Social Indicator Dashboard")
+```
+
+Above, we saw that rates of cases involving opiate-use were higher among Whites than Blacks, particularly for the _other opiate / synthetic_ category. Because it seems like that Whites make up a higher percentage of cases in the rural regions of Virginia, we would expect to see higher rates of cases involving _other opiate / synthetic_ use in these regions. The below graph, which shows rates of cases for _heroin_ and _other opiate / synthetic_ use across the various regions confirms this expectation. Rates of cases involving _other opiate / synthetic_ use are particularly high in _Region 3_, which makes up much of the Western half of the state of Virginia. 
+
+```{r}
+substances_region %>%
+  filter(Drug %in% c("Heroin", "Other Opiate/Synthetic")) %>%
+  ggplot(aes(Year, ItemPerc, color = Drug)) +
+  geom_line() +
+  facet_wrap( ~ Region) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks=c(2008, 2012, 2016)) +
+   labs(title = "Case Ratio for Opiates by Region (All Substances, All Races)", 
+       subtitle = "2008 - 2017", 
+       y = "Percent of all cases",
+       x = "",
+       color = "",
+       caption = "Source: Virginia Social Indicator Dashboard") +
+  theme(legend.position = "bottom")
+```
+
+##Conclusion
+
+The above exploratory analysis suggests several preliminary conclusions, all of which present avenues for further research. First and foremost, it is clear that DBHDS cases for _opiates_, particularly _synthetic opiates_, make up a higher percentage of total cases for Whites than for Blacks. This suggests that there might be a higher use-rate of opiates for Whites than for Blacks, but because the data here only shows the case-rate for DBHDS services and not actual use-rate among the population, we cannot draw any firm conclusions. 
+
+Second, the data suggests that there might be a connection between the case-rate (and use-rate) of different drugs. Particularly, there is a strong correlation between the case-rate for both _benzodiazepines_ and _other opiate/synthetic_ for both Whites and Blacks. 
+
+Virginia is on the front-lines of the opioid epidemic, so further analysis of the dynamics of opioid use and the use of Virginia's substance-abuse services is important for effectively responding to the recent rise of opiate use and opioid overdoses. 
+
+##Session Info
+```{r}
+devtools::session_info()
+```
